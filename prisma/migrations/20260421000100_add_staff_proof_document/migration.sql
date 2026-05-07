@@ -1,0 +1,4 @@
+ALTER TABLE "User"
+ADD COLUMN IF NOT EXISTS "proofDocumentType" TEXT,
+ADD COLUMN IF NOT EXISTS "proofDocumentName" TEXT,
+ADD COLUMN IF NOT EXISTS "proofDocumentData" TEXT;

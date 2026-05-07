@@ -1,0 +1,488 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ComplaintStatus {
+  OPEN
+  ASSIGNED
+  WORKED
+  RESOLVED
+  COMPLETED
+  CLOSED
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+}
+
+model User {
+  id           String   @id @default(uuid())
+  userId       String?  @unique
+  name         String
+  organizationName String?
+  accessLevel  String?
+  assignedRegion String?
+  accountStatus String?
+  onboardingFlow String?
+  proofDocumentType String?
+  proofDocumentName String?
+  proofDocumentData String? @db.Text
+  mobileNumber String   @unique
+  email        String?  @unique
+  password     String
+  roleId       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  locationId   String?
+  apartmentId  String?
+  flatId       String?
+
+  location     Location?  @relation(fields: [locationId], references: [id])
+  apartment    Apartment? @relation(fields: [apartmentId], references: [id])
+  flat         Flat?      @relation(fields: [flatId], references: [id])
+  role         Role       @relation(fields: [roleId], references: [id])
+  promotedLocations Location[] @relation("PromoterLocations")
+
+  raisedComplaints   Complaint[] @relation("ResidentComplaints")
+  assignedComplaints Complaint[] @relation("StaffComplaints")
+  amenityBookings    AmenityBooking[]
+  surveyResponses    SurveyResponse[]
+  helpdeskTickets    HelpdeskTicket[]
+  maintenanceBills   MaintenanceBill[]
+  parkingSlots       ParkingSlot[]
+  communityTalentProfiles CommunityTalentProfile[]
+}
+
+model Location {
+  id         String      @id @default(uuid())
+  name       String
+  code       String?     @unique
+  region     String?
+  address    String?
+  city       String?
+  state      String?
+  country    String?
+  pincode    String?
+  timezone   String?
+  adminName  String?
+  adminEmail String?
+  adminPhone String?
+  status     String?     @default("ACTIVE")
+  promoterId String?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  promoter   User?       @relation("PromoterLocations", fields: [promoterId], references: [id])
+  apartments Apartment[]
+  users      User[]
+
+  @@index([promoterId])
+}
+
+model Apartment {
+  id            String          @id @default(uuid())
+  name          String
+  code          String?         @unique
+  address       String?
+  city          String?
+  state         String?
+  pincode       String?
+  totalBlocks   Int?
+  totalFlats    Int?
+  adminName     String?
+  adminEmail    String?
+  adminPhone    String?
+  subscriptionPlan String?
+  onboardingStatus String?
+  status        String?         @default("ACTIVE")
+  locationId    String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  location      Location        @relation(fields: [locationId], references: [id])
+  blocks        Block[]
+  flats         Flat[]
+  users         User[]
+  complaints    Complaint[]
+  amenities     Amenity[]
+  surveys       Survey[]
+  faqArticles   FaqArticle[]
+  helpdeskItems HelpdeskTicket[]
+  associationMembers AssociationMember[]
+  maintenanceSetting MaintenanceSetting?
+  maintenanceBills MaintenanceBill[]
+  financeEntries FinanceEntry[]
+  announcements Announcement[]
+  documents ApartmentDocument[]
+  parkingSlots ParkingSlot[]
+  communityTalentProfiles CommunityTalentProfile[]
+}
+
+model Block {
+  id          String   @id @default(uuid())
+  name        String
+  apartmentId String
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+  flats       Flat[]
+}
+
+model Flat {
+  id          String   @id @default(uuid())
+  number      String
+  apartmentId String
+  blockId     String?
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+  block       Block?    @relation(fields: [blockId], references: [id])
+  users       User[]
+  complaints  Complaint[]
+  associationMembers AssociationMember[]
+  parkingSlots ParkingSlot[]
+  communityTalentProfiles CommunityTalentProfile[]
+}
+
+model CommunityTalentProfile {
+  id            String   @id @default(uuid())
+  apartmentId   String
+  residentId    String?
+  flatId        String?
+  apartmentName String?
+  residentName  String
+  flatNumber    String?
+  blockName     String?
+  profileTitle  String
+  mainSkill     String?
+  interestArea  String?
+  description   String?  @db.Text
+  status        String   @default("ACTIVE")
+  featured      Boolean  @default(false)
+  featuredAt    DateTime?
+  feedbackNotes String?  @db.Text
+  reviewedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  apartment     Apartment @relation(fields: [apartmentId], references: [id])
+  resident      User?     @relation(fields: [residentId], references: [id])
+  flat          Flat?     @relation(fields: [flatId], references: [id])
+
+  @@index([apartmentId])
+  @@index([residentId])
+  @@index([status])
+}
+
+model MembershipPlan {
+  id           String   @id @default(uuid())
+  name         String
+  price        Float
+  billingCycle String   @default("month")
+  status       String   @default("Active")
+  residents    Int      @default(0)
+  description  String   @db.Text
+  features     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model MembershipSubscription {
+  id        String   @id @default(uuid())
+  planId    String
+  residentId String?
+  status    String   @default("Active")
+  startedOn DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model MarketplaceItem {
+  id          String   @id @default(uuid())
+  title       String
+  category    String   @default("Other")
+  price       Float
+  status      String   @default("Active")
+  seller      String
+  sellerPhone String?
+  sellerAddress String? @db.Text
+  flatId      String?
+  postedOn    DateTime @default(now())
+  description String   @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SmartGatePass {
+  id           String   @id @default(uuid())
+  gate         String   @default("Main Gate")
+  type         String
+  visitorName  String
+  flat         String
+  residentName String?
+  status       String   @default("Waiting")
+  requestedOn  DateTime @default(now())
+  expectedTime String?
+  note         String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model DeliveryRecord {
+  id           String   @id @default(uuid())
+  partner      String
+  trackingId   String?
+  flat         String
+  residentName String?
+  status       String   @default("Expected")
+  deliveryType String
+  expectedTime String?
+  requestedOn  DateTime @default(now())
+  note         String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Pet {
+  id            String   @id @default(uuid())
+  name          String
+  type          String
+  breed         String?
+  flat          String
+  ownerName     String?
+  status        String   @default("Pending")
+  vaccineStatus String   @default("Due")
+  documentName  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model PetPolicy {
+  id        String   @id @default(uuid())
+  title     String
+  audience  String   @default("All residents")
+  message   String   @db.Text
+  sentOn    DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AssociationMember {
+  id            String    @id @default(uuid())
+  memberName    String
+  committeeRole String
+  mobileNumber  String?
+  email         String?
+  termStart     DateTime?
+  termEnd       DateTime?
+  status        String?   @default("ACTIVE")
+  apartmentId   String
+  flatId        String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  apartment     Apartment @relation(fields: [apartmentId], references: [id])
+  flat          Flat?     @relation(fields: [flatId], references: [id])
+}
+
+model MaintenanceSetting {
+  id            String   @id @default(uuid())
+  apartmentId   String   @unique
+  monthlyAmount Float
+  billingCycle  String?
+  dueDay        Int?
+  lateFee       Float?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  apartment     Apartment @relation(fields: [apartmentId], references: [id])
+}
+
+model MaintenanceBill {
+  id           String   @id @default(uuid())
+  apartmentId  String
+  residentId   String
+  billingMonth String
+  amount       Float
+  lateFee      Float?
+  dueDate      DateTime?
+  description  String?
+  status       String   @default("PENDING")
+  paidAmount   Float?
+  paymentMode  String?
+  receiptNumber String?
+  paidAt       DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apartment    Apartment @relation(fields: [apartmentId], references: [id])
+  resident     User      @relation(fields: [residentId], references: [id])
+
+  @@unique([apartmentId, residentId, billingMonth])
+}
+
+model FinanceEntry {
+  id            String   @id @default(uuid())
+  apartmentId   String
+  type          String
+  category      String?
+  description   String?
+  amount        Float
+  paymentMode   String?
+  reference     String?
+  entryDate     DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  apartment     Apartment @relation(fields: [apartmentId], references: [id])
+}
+
+model Announcement {
+  id          String   @id @default(uuid())
+  apartmentId String
+  title       String
+  message     String   @db.Text
+  category    String?
+  priority    String?  @default("NORMAL")
+  audience    String?  @default("ALL")
+  status      String?  @default("PUBLISHED")
+  mediaType   String?
+  mediaName   String?
+  mediaData   String?  @db.Text
+  publishAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+}
+
+model ApartmentDocument {
+  id          String   @id @default(uuid())
+  apartmentId String
+  title       String
+  category    String?
+  description String?
+  fileType    String?
+  fileName    String?
+  fileData    String?  @db.Text
+  status      String?  @default("ACTIVE")
+  uploadedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+}
+
+model ParkingSlot {
+  id            String   @id @default(uuid())
+  apartmentId   String
+  flatId        String?
+  residentId    String?
+  slotNumber    String
+  vehicleNumber String?
+  vehicleType   String?
+  ownerName     String?
+  stickerNumber String?
+  status        String?  @default("ASSIGNED")
+  notes         String?
+  assignedAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  apartment     Apartment @relation(fields: [apartmentId], references: [id])
+  flat          Flat?     @relation(fields: [flatId], references: [id])
+  resident      User?     @relation(fields: [residentId], references: [id])
+}
+
+model Complaint {
+  id              String          @id @default(uuid())
+  title           String
+  description     String
+  status          ComplaintStatus @default(OPEN)
+  apartmentId     String
+  flatId          String?
+  residentId      String
+  assignedStaffId String?
+  residentProofType String?
+  residentProofName String?
+  residentProofData String? @db.Text
+  staffProofType   String?
+  staffProofName   String?
+  staffProofData   String? @db.Text
+  staffProofNotes  String? @db.Text
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  apartment       Apartment @relation(fields: [apartmentId], references: [id])
+  flat            Flat?     @relation(fields: [flatId], references: [id])
+  resident        User      @relation("ResidentComplaints", fields: [residentId], references: [id])
+  assignedStaff   User?     @relation("StaffComplaints", fields: [assignedStaffId], references: [id])
+}
+
+model Amenity {
+  id          String   @id @default(uuid())
+  apartmentId String
+  name        String
+  status      String   @default("AVAILABLE")
+  createdAt   DateTime @default(now())
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+  bookings    AmenityBooking[]
+}
+
+model AmenityBooking {
+  id         String   @id @default(uuid())
+  amenityId  String
+  residentId String
+  startAt    DateTime
+  endAt      DateTime
+  createdAt  DateTime @default(now())
+  amenity    Amenity  @relation(fields: [amenityId], references: [id])
+  resident   User     @relation(fields: [residentId], references: [id])
+}
+
+model Survey {
+  id          String   @id @default(uuid())
+  apartmentId String
+  title       String
+  createdAt   DateTime @default(now())
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+  responses   SurveyResponse[]
+}
+
+model SurveyResponse {
+  id         String   @id @default(uuid())
+  surveyId   String
+  residentId String
+  answer     String
+  createdAt  DateTime @default(now())
+  survey     Survey   @relation(fields: [surveyId], references: [id])
+  resident   User     @relation(fields: [residentId], references: [id])
+}
+
+model FaqArticle {
+  id          String   @id @default(uuid())
+  apartmentId String
+  question    String
+  answer      String
+  createdAt   DateTime @default(now())
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+}
+
+model HelpdeskTicket {
+  id          String   @id @default(uuid())
+  apartmentId String
+  residentId  String
+  subject     String
+  description String
+  status      String   @default("OPEN")
+  createdAt   DateTime @default(now())
+  apartment   Apartment @relation(fields: [apartmentId], references: [id])
+  resident    User     @relation(fields: [residentId], references: [id])
+}
