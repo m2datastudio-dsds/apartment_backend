@@ -1,0 +1,7 @@
+ALTER TABLE "Flat"
+ADD COLUMN "squareFeet" DOUBLE PRECISION,
+ADD COLUMN "floorNumber" INTEGER,
+ADD COLUMN "bedroomCount" INTEGER,
+ADD COLUMN "bathroomCount" INTEGER,
+ADD COLUMN "facing" TEXT,
+ADD COLUMN "flatType" TEXT;

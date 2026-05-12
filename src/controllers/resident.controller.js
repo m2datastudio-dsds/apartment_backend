@@ -23,6 +23,15 @@ exports.payMaintenance = async (req, res, next) => {
       return res.status(400).json({ message: "residentId and billId are required" });
     }
 
+    const resident = await prisma.user.findUnique({
+      where: { id: residentId },
+      select: { flatId: true },
+    });
+
+    if (!resident) {
+      return res.status(404).json({ message: "Resident was not found" });
+    }
+
     const [bill] = await prisma.$queryRaw`
       UPDATE "MaintenanceBill"
       SET
@@ -34,7 +43,10 @@ exports.payMaintenance = async (req, res, next) => {
         "description" = COALESCE("description", '') || ${` | Paid by resident via ${paymentMode || "Manual"}`},
         "updatedAt" = ${paidAt ? new Date(paidAt) : new Date()}
       WHERE "id" = ${billId}
-        AND "residentId" = ${residentId}
+        AND (
+          "residentId" = ${residentId}
+          OR ("flatId" IS NOT NULL AND "flatId" = ${resident.flatId || null})
+        )
       RETURNING *
     `;
 
@@ -56,6 +68,15 @@ exports.getMaintenance = async (req, res, next) => {
       return res.status(400).json({ message: "residentId is required" });
     }
 
+    const residentAccount = await prisma.user.findUnique({
+      where: { id: residentId },
+      select: { flatId: true },
+    });
+
+    if (!residentAccount) {
+      return res.status(404).json({ message: "Resident was not found" });
+    }
+
     const bills = await prisma.$queryRaw`
       SELECT
         bill.*,
@@ -63,13 +84,15 @@ exports.getMaintenance = async (req, res, next) => {
         resident."userId",
         resident."name" AS "residentName",
         flat."number" AS "flatNumber",
+        flat."squareFeet",
         block."name" AS "blockName"
       FROM "MaintenanceBill" bill
       JOIN "Apartment" apartment ON apartment."id" = bill."apartmentId"
-      JOIN "User" resident ON resident."id" = bill."residentId"
-      LEFT JOIN "Flat" flat ON flat."id" = resident."flatId"
+      LEFT JOIN "User" resident ON resident."id" = bill."residentId"
+      LEFT JOIN "Flat" flat ON flat."id" = COALESCE(bill."flatId", resident."flatId")
       LEFT JOIN "Block" block ON block."id" = flat."blockId"
       WHERE bill."residentId" = ${residentId}
+        OR (bill."flatId" IS NOT NULL AND bill."flatId" = ${residentAccount.flatId || null})
       ORDER BY bill."createdAt" DESC
     `;
 

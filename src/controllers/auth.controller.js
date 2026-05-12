@@ -4,7 +4,7 @@ const prisma = require("../lib/prisma");
 const { getRoleId, getUserRoleName, ROLE_NAMES, roleInclude, validateRoleName } = require("../utils/roles");
 const { generateUserId } = require("../utils/userId");
 
-function sanitizeUser(user) {
+function sanitizeUser(user, associationMember = null) {
   return {
     id: user.id,
     userId: user.userId,
@@ -14,6 +14,7 @@ function sanitizeUser(user) {
     assignedRegion: user.assignedRegion,
     accountStatus: user.accountStatus,
     onboardingFlow: user.onboardingFlow,
+    residentType: user.residentType,
     mobileNumber: user.mobileNumber,
     email: user.email,
     role: getUserRoleName(user),
@@ -21,13 +22,22 @@ function sanitizeUser(user) {
     locationId: user.locationId,
     apartmentId: user.apartmentId,
     flatId: user.flatId,
+    associationMember: associationMember
+      ? {
+          id: associationMember.id,
+          committeeRole: associationMember.committeeRole,
+          status: associationMember.status,
+          apartmentId: associationMember.apartmentId,
+          flatId: associationMember.flatId,
+        }
+      : null,
     createdAt: user.createdAt,
   };
 }
 
 exports.register = async (req, res, next) => {
   try {
-    const { name, mobileNumber, email, password, role, locationId, apartmentId, flatId } = req.body;
+    const { name, mobileNumber, email, password, role, locationId, apartmentId, flatId, residentType } = req.body;
 
     if (!name || !mobileNumber || !password || !role) {
       return res.status(400).json({
@@ -69,6 +79,7 @@ exports.register = async (req, res, next) => {
         locationId: locationId || null,
         apartmentId: apartmentId || null,
         flatId: flatId || null,
+        residentType: role === "RESIDENT" ? residentType || "OWNER" : null,
       },
       include: roleInclude,
     });
@@ -118,11 +129,29 @@ exports.login = async (req, res, next) => {
       { expiresIn: "1d" }
     );
 
+    const associationMember =
+      getUserRoleName(user) === "RESIDENT"
+        ? await prisma.associationMember.findFirst({
+            where: {
+              residentId: user.id,
+              status: "ACTIVE",
+            },
+            orderBy: { createdAt: "desc" },
+            select: {
+              id: true,
+              committeeRole: true,
+              status: true,
+              apartmentId: true,
+              flatId: true,
+            },
+          })
+        : null;
+
     res.json({
       message: "Login successful",
       data: {
         token,
-        user: sanitizeUser(user),
+        user: sanitizeUser(user, associationMember),
       },
     });
   } catch (error) {

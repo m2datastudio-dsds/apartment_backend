@@ -7,6 +7,7 @@ router.get("/dashboard", controller.getDashboard);
 router.get("/blocks", controller.getBlocks);
 router.get("/block-flat-inventory", controller.getBlockFlatInventory);
 router.get("/residents", controller.getResidents);
+router.post("/residents", controller.createResident);
 router.get("/association-members", controller.getAssociationMembers);
 router.get("/complaints", controller.getComplaints);
 router.get("/staff", controller.getStaff);

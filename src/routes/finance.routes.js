@@ -5,6 +5,7 @@ const router = Router();
 
 router.post("/maintenance/setup", controller.setupMaintenance);
 router.post("/maintenance/generate", controller.generateMaintenance);
+router.post("/maintenance/extract-charge", controller.extractFlatCharge);
 router.post("/maintenance/pay", controller.recordPayment);
 router.get("/maintenance", controller.getMaintenance);
 router.get("/balance-sheet", controller.getBalanceSheet);

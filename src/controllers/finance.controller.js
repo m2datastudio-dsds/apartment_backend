@@ -18,9 +18,129 @@ function normalizeFinanceType(type) {
   return normalized === "EXPENSE" ? "EXPENSE" : "INCOME";
 }
 
+async function generateMaintenanceBills({
+  apartmentId,
+  billingMonth,
+  dueDate,
+  description,
+  amount,
+  lateFee,
+  amountMode,
+  ratePerSquareFoot,
+}) {
+  const flats = await prisma.flat.findMany({
+    where: { apartmentId },
+    include: {
+      users: {
+        where: {
+          apartmentId,
+          ...roleWhere("RESIDENT"),
+        },
+        select: {
+          id: true,
+        },
+        take: 1,
+      },
+    },
+  });
+  let generatedCount = 0;
+  let skippedCount = 0;
+
+  for (const flat of flats) {
+    const resident = flat.users[0] || null;
+    const flatSquareFeet = Number(flat.squareFeet || 0);
+    const calculatedAmount =
+      amountMode === "SQUARE_FEET_RATE"
+        ? flatSquareFeet * ratePerSquareFoot
+        : amount;
+
+    const [existingBill] = await prisma.$queryRaw`
+      SELECT "id"
+      FROM "MaintenanceBill"
+      WHERE "apartmentId" = ${apartmentId}
+        AND "flatId" = ${flat.id}
+        AND "billingMonth" = ${billingMonth}
+        AND "chargeType" = 'MONTHLY'
+      LIMIT 1
+    `;
+
+    if (existingBill) {
+      await prisma.$queryRaw`
+        UPDATE "MaintenanceBill"
+        SET
+          "residentId" = ${resident?.id || null},
+          "amount" = ${calculatedAmount},
+          "lateFee" = ${lateFee},
+          "dueDate" = ${dueDate ? new Date(dueDate) : null},
+          "description" = ${description || "Monthly maintenance"},
+          "updatedAt" = NOW()
+        WHERE "id" = ${existingBill.id}
+      `;
+      generatedCount += 1;
+      continue;
+    }
+
+    await prisma.$queryRaw`
+      INSERT INTO "MaintenanceBill" (
+        "id",
+        "apartmentId",
+        "flatId",
+        "residentId",
+        "billingMonth",
+        "chargeType",
+        "amount",
+        "lateFee",
+        "dueDate",
+        "description",
+        "status",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES (
+        ${randomUUID()},
+        ${apartmentId},
+        ${flat.id},
+        ${resident?.id || null},
+        ${billingMonth},
+        'MONTHLY',
+        ${calculatedAmount},
+        ${lateFee},
+        ${dueDate ? new Date(dueDate) : null},
+        ${description || "Monthly maintenance"},
+        'PENDING',
+        NOW(),
+        NOW()
+      )
+    `;
+
+    generatedCount += 1;
+  }
+
+  return {
+    apartmentId,
+    billingMonth,
+    flatsCount: flats.length,
+    generatedCount,
+    upsertedCount: generatedCount,
+    skippedCount,
+  };
+}
+
 exports.setupMaintenance = async (req, res, next) => {
   try {
-    const { apartmentId, monthlyAmount, billingCycle, dueDay, lateFee, notes } = req.body;
+    const {
+      apartmentId,
+      monthlyAmount,
+      billingCycle,
+      dueDay,
+      lateFee,
+      notes,
+      assignToAllFlats,
+      billingMonth,
+      dueDate,
+      amountMode,
+      ratePerSquareFoot,
+    } = req.body;
     const parsedAmount = toNumber(monthlyAmount);
 
     if (!apartmentId || parsedAmount === null) {
@@ -60,7 +180,30 @@ exports.setupMaintenance = async (req, res, next) => {
       RETURNING *
     `;
 
-    res.status(201).json({ data: setting, message: "maintenance setup saved" });
+    let generation = null;
+    const resolvedAmountMode = amountMode === "FIXED" ? "FIXED" : "SQUARE_FEET_RATE";
+    const resolvedRate = toNumber(ratePerSquareFoot) ?? parsedAmount;
+
+    if (assignToAllFlats) {
+      generation = await generateMaintenanceBills({
+        apartmentId,
+        billingMonth: billingMonth || new Date().toISOString().slice(0, 7),
+        dueDate,
+        description: notes || "Maintenance charge",
+        amount: parsedAmount,
+        lateFee: toNumber(lateFee),
+        amountMode: resolvedAmountMode,
+        ratePerSquareFoot: resolvedRate,
+      });
+    }
+
+    res.status(201).json({
+      data: {
+        setting,
+        generation,
+      },
+      message: generation ? "maintenance setup saved and assigned to flats" : "maintenance setup saved",
+    });
   } catch (error) {
     next(error);
   }
@@ -68,7 +211,7 @@ exports.setupMaintenance = async (req, res, next) => {
 
 exports.generateMaintenance = async (req, res, next) => {
   try {
-    const { apartmentId, billingMonth, dueDate, description } = req.body;
+    const { apartmentId, billingMonth, dueDate, description, amountMode, ratePerSquareFoot } = req.body;
 
     if (!apartmentId) {
       return res.status(400).json({ message: "apartmentId is required" });
@@ -86,59 +229,91 @@ exports.generateMaintenance = async (req, res, next) => {
       return res.status(400).json({ message: "Setup monthly maintenance charges before auto generate" });
     }
 
-    const residents = await prisma.user.findMany({ where: { apartmentId, ...roleWhere("RESIDENT") } });
-    let generatedCount = 0;
-    let skippedCount = 0;
-
-    for (const resident of residents) {
-      const inserted = await prisma.$queryRaw`
-        INSERT INTO "MaintenanceBill" (
-          "id",
-          "apartmentId",
-          "residentId",
-          "billingMonth",
-          "amount",
-          "lateFee",
-          "dueDate",
-          "description",
-          "status",
-          "createdAt",
-          "updatedAt"
-        )
-        VALUES (
-          ${randomUUID()},
-          ${apartmentId},
-          ${resident.id},
-          ${resolvedBillingMonth},
-          ${setting.monthlyAmount},
-          ${setting.lateFee},
-          ${dueDate ? new Date(dueDate) : null},
-          ${description || null},
-          'PENDING',
-          NOW(),
-          NOW()
-        )
-        ON CONFLICT ("apartmentId", "residentId", "billingMonth") DO NOTHING
-        RETURNING "id"
-      `;
-
-      if (inserted.length) {
-        generatedCount += 1;
-      } else {
-        skippedCount += 1;
-      }
-    }
+    const resolvedAmountMode = amountMode === "FIXED" ? "FIXED" : "SQUARE_FEET_RATE";
+    const generation = await generateMaintenanceBills({
+      apartmentId,
+      billingMonth: resolvedBillingMonth,
+      dueDate,
+      description,
+      amount: Number(setting.monthlyAmount || 0),
+      lateFee: setting.lateFee,
+      amountMode: resolvedAmountMode,
+      ratePerSquareFoot: toNumber(ratePerSquareFoot) ?? Number(setting.monthlyAmount || 0),
+    });
 
     res.json({
-      data: {
-        apartmentId,
-        billingMonth: resolvedBillingMonth,
-        residentsCount: residents.length,
-        generatedCount,
-        skippedCount,
-      },
+      data: generation,
       message: "maintenance generated",
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.extractFlatCharge = async (req, res, next) => {
+  try {
+    const { apartmentId, flatId, billingMonth, amount, dueDate, description } = req.body;
+    const parsedAmount = toNumber(amount);
+
+    if (!apartmentId || !flatId || parsedAmount === null) {
+      return res.status(400).json({ message: "apartmentId, flatId, and amount are required" });
+    }
+
+    const flat = await prisma.flat.findFirst({
+      where: { id: flatId, apartmentId },
+      include: {
+        users: {
+          where: {
+            apartmentId,
+            ...roleWhere("RESIDENT"),
+          },
+          select: {
+            id: true,
+          },
+          take: 1,
+        },
+      },
+    });
+
+    if (!flat) {
+      return res.status(404).json({ message: "Selected flat was not found for this apartment" });
+    }
+
+    const resolvedBillingMonth = billingMonth || new Date().toISOString().slice(0, 7);
+    const resident = flat.users[0] || null;
+    const [bill] = await prisma.$queryRaw`
+      INSERT INTO "MaintenanceBill" (
+        "id",
+        "apartmentId",
+        "flatId",
+        "residentId",
+        "billingMonth",
+        "chargeType",
+        "amount",
+        "dueDate",
+        "description",
+        "status",
+        "createdAt",
+        "updatedAt"
+      )
+      VALUES (
+        ${randomUUID()},
+        ${apartmentId},
+        ${flat.id},
+        ${resident?.id || null},
+        ${resolvedBillingMonth},
+        'EXTRA',
+        ${parsedAmount},
+        ${dueDate ? new Date(dueDate) : null},
+        ${description || "Extra spent charge"},
+        'PENDING',
+        NOW(),
+        NOW()
+      )
+      RETURNING *
+    `;
+
+    res.status(201).json({ data: bill, message: "extra spent charge saved separately" });
   } catch (error) {
     next(error);
   }
@@ -167,11 +342,12 @@ exports.getMaintenance = async (req, res, next) => {
           resident."name" AS "residentName",
           resident."mobileNumber",
           flat."number" AS "flatNumber",
+          flat."squareFeet",
           block."name" AS "blockName"
         FROM "MaintenanceBill" bill
         JOIN "Apartment" apartment ON apartment."id" = bill."apartmentId"
-        JOIN "User" resident ON resident."id" = bill."residentId"
-        LEFT JOIN "Flat" flat ON flat."id" = resident."flatId"
+        LEFT JOIN "User" resident ON resident."id" = bill."residentId"
+        LEFT JOIN "Flat" flat ON flat."id" = COALESCE(bill."flatId", resident."flatId")
         LEFT JOIN "Block" block ON block."id" = flat."blockId"
         WHERE bill."apartmentId" = ${apartmentId}
         ORDER BY bill."createdAt" DESC
@@ -254,10 +430,11 @@ exports.getBalanceSheet = async (req, res, next) => {
           resident."userId",
           resident."name" AS "residentName",
           flat."number" AS "flatNumber",
+          flat."squareFeet",
           block."name" AS "blockName"
         FROM "MaintenanceBill" bill
-        JOIN "User" resident ON resident."id" = bill."residentId"
-        LEFT JOIN "Flat" flat ON flat."id" = resident."flatId"
+        LEFT JOIN "User" resident ON resident."id" = bill."residentId"
+        LEFT JOIN "Flat" flat ON flat."id" = COALESCE(bill."flatId", resident."flatId")
         LEFT JOIN "Block" block ON block."id" = flat."blockId"
         WHERE bill."apartmentId" = ${apartmentId}
           AND bill."status" = 'PAID'
@@ -286,8 +463,8 @@ exports.getBalanceSheet = async (req, res, next) => {
       ...paidBills.map((bill) => ({
         id: bill.id,
         type: "INCOME",
-        category: "Maintenance",
-        description: `Maintenance ${bill.billingMonth || ""}`.trim(),
+        category: bill.chargeType === "EXTRA" ? "Maintenance Extra" : "Maintenance",
+        description: `${bill.chargeType === "EXTRA" ? "Extra charge" : "Maintenance"} ${bill.billingMonth || ""}`.trim(),
         amount: Number(bill.paidAmount || bill.amount || 0),
         paymentMode: bill.paymentMode || "Maintenance",
         reference: bill.receiptNumber || bill.userId || null,

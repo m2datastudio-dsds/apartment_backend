@@ -35,6 +35,7 @@ model User {
   assignedRegion String?
   accountStatus String?
   onboardingFlow String?
+  residentType String?
   proofDocumentType String?
   proofDocumentName String?
   proofDocumentData String? @db.Text
@@ -63,6 +64,8 @@ model User {
   maintenanceBills   MaintenanceBill[]
   parkingSlots       ParkingSlot[]
   communityTalentProfiles CommunityTalentProfile[]
+  associationMemberships AssociationMember[]
+  familyMembers ResidentFamilyMember[]
 }
 
 model Location {
@@ -104,6 +107,11 @@ model Apartment {
   adminEmail    String?
   adminPhone    String?
   subscriptionPlan String?
+  subscriptionBillingCycle String?
+  subscriptionPaymentStatus String? @default("PENDING")
+  subscriptionStartDate DateTime?
+  subscriptionEndDate DateTime?
+  subscriptionPaidAt DateTime?
   onboardingStatus String?
   status        String?         @default("ACTIVE")
   locationId    String
@@ -126,11 +134,16 @@ model Apartment {
   documents ApartmentDocument[]
   parkingSlots ParkingSlot[]
   communityTalentProfiles CommunityTalentProfile[]
+  familyMembers ResidentFamilyMember[]
 }
 
 model Block {
   id          String   @id @default(uuid())
   name        String
+  code        String?
+  floorCount  Int?
+  status      String?  @default("ACTIVE")
+  notes       String?  @db.Text
   apartmentId String
   apartment   Apartment @relation(fields: [apartmentId], references: [id])
   flats       Flat[]
@@ -139,15 +152,57 @@ model Block {
 model Flat {
   id          String   @id @default(uuid())
   number      String
+  squareFeet  Float?
+  floorNumber Int?
+  bedroomCount Int?
+  bathroomCount Int?
+  facing      String?
+  flatType    String?
+  occupancyStatus String? @default("VACANT")
+  occupantName String?
+  occupantPhone String?
+  occupantEmail String?
+  tenantName String?
+  tenantPhone String?
+  tenantEmail String?
+  tenantStart DateTime?
+  tenantEnd DateTime?
+  notes String? @db.Text
   apartmentId String
   blockId     String?
   apartment   Apartment @relation(fields: [apartmentId], references: [id])
   block       Block?    @relation(fields: [blockId], references: [id])
   users       User[]
   complaints  Complaint[]
+  maintenanceBills MaintenanceBill[]
   associationMembers AssociationMember[]
   parkingSlots ParkingSlot[]
   communityTalentProfiles CommunityTalentProfile[]
+  familyMembers ResidentFamilyMember[]
+}
+
+model ResidentFamilyMember {
+  id           String   @id @default(uuid())
+  apartmentId  String
+  flatId       String
+  residentId   String?
+  name         String
+  relationship String?
+  mobileNumber String?
+  email        String?
+  age          Int?
+  notes        String?  @db.Text
+  status       String   @default("ACTIVE")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  apartment    Apartment @relation(fields: [apartmentId], references: [id])
+  flat         Flat      @relation(fields: [flatId], references: [id])
+  resident     User?     @relation(fields: [residentId], references: [id])
+
+  @@index([apartmentId])
+  @@index([flatId])
+  @@index([residentId])
 }
 
 model CommunityTalentProfile {
@@ -284,11 +339,13 @@ model AssociationMember {
   status        String?   @default("ACTIVE")
   apartmentId   String
   flatId        String?
+  residentId    String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   apartment     Apartment @relation(fields: [apartmentId], references: [id])
   flat          Flat?     @relation(fields: [flatId], references: [id])
+  resident      User?     @relation(fields: [residentId], references: [id])
 }
 
 model MaintenanceSetting {
@@ -308,8 +365,10 @@ model MaintenanceSetting {
 model MaintenanceBill {
   id           String   @id @default(uuid())
   apartmentId  String
-  residentId   String
+  flatId       String?
+  residentId   String?
   billingMonth String
+  chargeType   String   @default("MONTHLY")
   amount       Float
   lateFee      Float?
   dueDate      DateTime?
@@ -323,9 +382,8 @@ model MaintenanceBill {
   updatedAt    DateTime @updatedAt
 
   apartment    Apartment @relation(fields: [apartmentId], references: [id])
-  resident     User      @relation(fields: [residentId], references: [id])
-
-  @@unique([apartmentId, residentId, billingMonth])
+  flat         Flat?     @relation(fields: [flatId], references: [id])
+  resident     User?     @relation(fields: [residentId], references: [id])
 }
 
 model FinanceEntry {

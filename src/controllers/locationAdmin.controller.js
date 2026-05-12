@@ -1,13 +1,54 @@
 const { PrismaClient } = require("@prisma/client");
 const { prepareAdminUser, serializeProvisionedUser } = require("../utils/provisionAdminUser");
+const { roleWhere } = require("../utils/roles");
 
 const prisma = new PrismaClient();
 
 exports.getDashboard = async (req, res, next) => {
   try {
-    const { locationId } = req.query;
-    const apartments = await prisma.apartment.count({ where: locationId ? { locationId } : undefined });
-    res.json({ data: { apartments }, message: "success" });
+    const locationId = req.query.locationId || req.user?.locationId;
+    const apartmentWhere = locationId ? { locationId } : undefined;
+    const apartmentRelationWhere = locationId ? { apartment: { locationId } } : undefined;
+
+    const [managedApartments, activeResidents, openComplaints, pendingBills, financeEntries] = await Promise.all([
+      prisma.apartment.count({ where: apartmentWhere }),
+      prisma.user.count({
+        where: {
+          ...roleWhere("RESIDENT"),
+          apartment: apartmentWhere,
+        },
+      }),
+      prisma.complaint.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: {
+            in: ["OPEN", "ASSIGNED", "WORKED"],
+          },
+        },
+      }),
+      prisma.maintenanceBill.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: {
+            not: "PAID",
+          },
+        },
+      }),
+      prisma.financeEntry.count({ where: apartmentRelationWhere }),
+    ]);
+
+    res.json({
+      data: {
+        managedApartments,
+        activeResidents,
+        criticalAlerts: openComplaints + pendingBills,
+        openReports: financeEntries + openComplaints,
+        openComplaints,
+        pendingBills,
+        financeEntries,
+      },
+      message: "success",
+    });
   } catch (error) {
     next(error);
   }
@@ -29,6 +70,205 @@ exports.getApartments = async (req, res, next) => {
     });
 
     res.json({ data: apartments, message: "success" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getReports = async (req, res, next) => {
+  try {
+    const locationId = req.query.locationId || req.user?.locationId;
+    const locationWhere = locationId ? { id: locationId } : undefined;
+    const apartmentWhere = locationId ? { locationId } : undefined;
+    const apartmentRelationWhere = locationId
+      ? {
+          apartment: {
+            locationId,
+          },
+        }
+      : undefined;
+
+    const [
+      totalLocations,
+      totalApartments,
+      totalSubscriptions,
+      totalComplaints,
+      financeTotal,
+      resolvedComplaints,
+      paidBills,
+      totalBills,
+      reportApartments,
+    ] = await Promise.all([
+      prisma.location.count({ where: locationWhere }),
+      prisma.apartment.count({ where: apartmentWhere }),
+      prisma.apartment.count({
+        where: {
+          ...(apartmentWhere || {}),
+          subscriptionPlan: {
+            not: null,
+          },
+        },
+      }),
+      prisma.complaint.count({ where: apartmentRelationWhere }),
+      prisma.financeEntry.aggregate({
+        where: apartmentRelationWhere,
+        _sum: {
+          amount: true,
+        },
+      }),
+      prisma.complaint.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: {
+            in: ["RESOLVED", "COMPLETED", "CLOSED"],
+          },
+        },
+      }),
+      prisma.maintenanceBill.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: "PAID",
+        },
+      }),
+      prisma.maintenanceBill.count({ where: apartmentRelationWhere }),
+      prisma.apartment.findMany({
+        where: apartmentWhere,
+        select: {
+          id: true,
+          name: true,
+          subscriptionPlan: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    res.json({
+      data: {
+        totalApartments,
+        totalLocations,
+        totalSubscriptions,
+        totalComplaints,
+        totalFinance: financeTotal._sum.amount || 0,
+        resolvedComplaints,
+        paidBills,
+        totalBills,
+        paymentSuccessPercent: totalBills ? Math.round((paidBills / totalBills) * 100) : 0,
+        complaintResolutionPercent: totalComplaints ? Math.round((resolvedComplaints / totalComplaints) * 100) : 0,
+        apartments: reportApartments,
+      },
+      message: "success",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getActivities = async (req, res, next) => {
+  try {
+    const locationId = req.query.locationId || req.user?.locationId;
+    const apartmentRelationWhere = locationId ? { apartment: { locationId } } : undefined;
+
+    const [complaintUpdates, financeEvents, announcements, helpdeskTickets] = await Promise.all([
+      prisma.complaint.count({ where: apartmentRelationWhere }),
+      prisma.financeEntry.count({ where: apartmentRelationWhere }),
+      prisma.announcement.count({ where: apartmentRelationWhere }),
+      prisma.helpdeskTicket.count({ where: apartmentRelationWhere }),
+    ]);
+
+    const recentComplaints = await prisma.complaint.findMany({
+      where: apartmentRelationWhere,
+      orderBy: { updatedAt: "desc" },
+      take: 6,
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        updatedAt: true,
+        apartment: { select: { name: true } },
+      },
+    });
+
+    res.json({
+      data: {
+        activityEvents: complaintUpdates + financeEvents + announcements + helpdeskTickets,
+        complaintUpdates,
+        financeEvents,
+        announcements,
+        helpdeskTickets,
+        recentComplaints,
+      },
+      message: "success",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getAlerts = async (req, res, next) => {
+  try {
+    const locationId = req.query.locationId || req.user?.locationId;
+    const apartmentRelationWhere = locationId ? { apartment: { locationId } } : undefined;
+
+    const [emergencyAlerts, slaBreaches, financeRisks, securityFlags, recentOpenComplaints] = await Promise.all([
+      prisma.complaint.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: "OPEN",
+        },
+      }),
+      prisma.complaint.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: {
+            in: ["ASSIGNED", "WORKED"],
+          },
+        },
+      }),
+      prisma.maintenanceBill.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: {
+            not: "PAID",
+          },
+        },
+      }),
+      prisma.helpdeskTicket.count({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: "OPEN",
+        },
+      }),
+      prisma.complaint.findMany({
+        where: {
+          ...(apartmentRelationWhere || {}),
+          status: {
+            in: ["OPEN", "ASSIGNED", "WORKED"],
+          },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 6,
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          updatedAt: true,
+          apartment: { select: { name: true } },
+        },
+      }),
+    ]);
+
+    res.json({
+      data: {
+        emergencyAlerts,
+        slaBreaches,
+        financeRisks,
+        securityFlags,
+        recentOpenComplaints,
+      },
+      message: "success",
+    });
   } catch (error) {
     next(error);
   }
