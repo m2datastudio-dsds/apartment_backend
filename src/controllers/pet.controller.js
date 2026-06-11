@@ -21,7 +21,7 @@ exports.getPets = async (req, res, next) => {
 
 exports.registerPet = async (req, res, next) => {
   try {
-    const { name, type, breed, flat, ownerName } = req.body;
+    const { name, type, breed, flat, ownerName, documentName, documentType, documentData } = req.body;
 
     if (!name || !type || !flat) {
       return res.status(400).json({ message: "Pet name, type, and flat are required" });
@@ -35,8 +35,10 @@ exports.registerPet = async (req, res, next) => {
         flat: String(flat).trim(),
         ownerName: ownerName || "Resident",
         status: "Pending",
-        vaccineStatus: "Due",
-        documentName: "",
+        vaccineStatus: documentName || documentData ? "Uploaded" : "Due",
+        documentName: documentName || "",
+        documentType: documentType || null,
+        documentData: documentData || null,
       },
     });
 
@@ -70,12 +72,18 @@ exports.updatePetStatus = async (req, res, next) => {
 
 exports.uploadPetDocument = async (req, res, next) => {
   try {
-    const { petId, documentName } = req.body;
+    const { petId, documentName, documentType, documentData } = req.body;
+
+    if (!petId) {
+      return res.status(400).json({ message: "Pet selection is required" });
+    }
 
     const pet = await prisma.pet.update({
       where: { id: petId },
       data: {
         documentName: documentName || "pet-document.pdf",
+        documentType: documentType || null,
+        documentData: documentData || null,
         vaccineStatus: "Uploaded",
       },
     });

@@ -1,17 +1,48 @@
 const { PrismaClient } = require("@prisma/client");
+const jwt = require("jsonwebtoken");
 
 const prisma = new PrismaClient();
 
+function getRequestUser(req) {
+  const authHeader = req.headers.authorization || "";
+  const [scheme, token] = authHeader.split(" ");
+
+  if (scheme !== "Bearer" || !token) {
+    return null;
+  }
+
+  try {
+    return jwt.verify(token, process.env.JWT_SECRET || "apartment-secret-key");
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function getAuthenticatedUser(req) {
+  const payload = getRequestUser(req);
+
+  if (!payload?.sub) {
+    return null;
+  }
+
+  return prisma.user.findUnique({
+    where: { id: payload.sub },
+    include: { role: true, flat: { include: { block: true } }, apartment: true },
+  });
+}
+
 exports.createProfile = async (req, res) => {
   try {
-    const resident = req.body.residentId
+    const authUser = await getAuthenticatedUser(req);
+    const residentId = req.body.residentId || (authUser?.role?.name === "RESIDENT" ? authUser.id : null);
+    const resident = residentId
       ? await prisma.user.findUnique({
-          where: { id: req.body.residentId },
+          where: { id: residentId },
           include: { flat: { include: { block: true } }, apartment: true },
         })
       : null;
 
-    const apartmentId = req.body.apartmentId || resident?.apartmentId;
+    const apartmentId = req.body.apartmentId || resident?.apartmentId || authUser?.apartmentId;
 
     if (!apartmentId) {
       return res.status(400).json({ message: "apartmentId is required" });
@@ -21,7 +52,7 @@ exports.createProfile = async (req, res) => {
       data: {
         apartmentId,
         apartmentName: resident?.apartment?.name || req.body.apartmentName || null,
-        residentId: req.body.residentId || null,
+        residentId: resident?.id || residentId || null,
         residentName: resident?.name || req.body.residentName || "Resident",
         flatId: req.body.flatId || resident?.flatId || null,
         flatNumber: resident?.flat?.number || req.body.flatNumber || null,
@@ -41,10 +72,14 @@ exports.createProfile = async (req, res) => {
 
 exports.getProfiles = async (req, res) => {
   try {
+    const authUser = await getAuthenticatedUser(req);
     const where = {};
 
-    if (req.query.apartmentId) {
-      where.apartmentId = req.query.apartmentId;
+    const includeAllApartments = req.query.scope === "all" || req.query.allApartments === "true";
+    const apartmentId = includeAllApartments ? null : req.query.apartmentId || authUser?.apartmentId;
+
+    if (apartmentId) {
+      where.apartmentId = apartmentId;
     }
 
     if (req.query.residentId) {
@@ -58,6 +93,15 @@ exports.getProfiles = async (req, res) => {
     const result = await prisma.communityTalentProfile.findMany({
       where,
       orderBy: { createdAt: "desc" },
+      include: {
+        resident: {
+          select: {
+            name: true,
+            mobileNumber: true,
+            email: true,
+          },
+        },
+      },
     });
 
     return res.json({ data: result, message: "success" });

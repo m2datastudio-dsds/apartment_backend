@@ -18,14 +18,19 @@ exports.assignComplaint = async (req, res, next) => {
   try {
     const { complaintId } = req.params;
     const { assignedStaffId } = req.body;
+    const assignedById = req.user?.id;
 
     if (!complaintId || !assignedStaffId) {
       return res.status(400).json({ message: "complaintId and assignedStaffId are required" });
     }
 
+    if (!assignedById) {
+      return res.status(401).json({ message: "Logged-in user is required to assign complaints" });
+    }
+
     const complaint = await prisma.complaint.update({
       where: { id: complaintId },
-      data: { assignedStaffId, status: "ASSIGNED" },
+      data: { assignedStaffId, assignedById, status: "ASSIGNED" },
     });
     res.json({ data: complaint, message: "complaint assigned" });
   } catch (error) {
@@ -49,14 +54,19 @@ exports.resolveComplaint = async (req, res, next) => {
 exports.closeComplaint = async (req, res, next) => {
   try {
     const { complaintId } = req.params;
+    const closedById = req.user?.id;
 
     if (!complaintId) {
       return res.status(400).json({ message: "complaintId is required" });
     }
 
+    if (!closedById) {
+      return res.status(401).json({ message: "Logged-in user is required to close complaints" });
+    }
+
     const result = await prisma.complaint.updateMany({
       where: { id: complaintId, status: "COMPLETED" },
-      data: { status: "CLOSED" },
+      data: { status: "CLOSED", closedById },
     });
 
     if (!result.count) {

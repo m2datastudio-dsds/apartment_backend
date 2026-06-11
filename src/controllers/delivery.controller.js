@@ -96,15 +96,43 @@ exports.updateDelivery = async (req, res, next) => {
 
 exports.updateDeliveryStatus = async (req, res, next) => {
   try {
-    const { status } = req.body;
+    const {
+      status,
+      pickupStaffId,
+      pickupStaffName,
+      pickupStaffUserId,
+      pickupStaffPhone,
+      residentReceivedName,
+    } = req.body;
 
     if (!status) {
       return res.status(400).json({ message: "Status is required" });
     }
 
+    const normalizedStatus = String(status).toLowerCase();
+    const isPickup = normalizedStatus === "picked up";
+    const isResidentReceived = normalizedStatus === "resident received";
+
     const delivery = await prisma.deliveryRecord.update({
       where: { id: req.params.id },
-      data: { status },
+      data: {
+        status,
+        ...(isPickup
+          ? {
+              pickupStaffId: pickupStaffId || null,
+              pickupStaffName: pickupStaffName || "Staff",
+              pickupStaffUserId: pickupStaffUserId || null,
+              pickupStaffPhone: pickupStaffPhone || null,
+              pickedUpAt: new Date(),
+            }
+          : {}),
+        ...(isResidentReceived
+          ? {
+              residentReceivedName: residentReceivedName || "Resident",
+              residentReceivedAt: new Date(),
+            }
+          : {}),
+      },
     });
 
     res.json({

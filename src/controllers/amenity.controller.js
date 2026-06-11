@@ -46,14 +46,44 @@ exports.getAmenities = async (req, res, next) => {
 
 exports.createAmenity = async (req, res, next) => {
   try {
-    const { apartmentId, name, status } = req.body;
+    const {
+      apartmentId,
+      name,
+      type,
+      description,
+      location,
+      capacity,
+      openingTime,
+      closingTime,
+      bookingRules,
+      status,
+    } = req.body;
 
     if (!apartmentId || !name?.trim()) {
       return res.status(400).json({ message: "apartmentId and name are required" });
     }
 
+    const normalizedCapacity = capacity === undefined || capacity === null || capacity === ""
+      ? null
+      : Number(capacity);
+
+    if (normalizedCapacity !== null && (!Number.isInteger(normalizedCapacity) || normalizedCapacity < 1)) {
+      return res.status(400).json({ message: "capacity must be a positive number" });
+    }
+
     const amenity = await prisma.amenity.create({
-      data: { apartmentId, name: name.trim(), status: status || "AVAILABLE" },
+      data: {
+        apartmentId,
+        name: name.trim(),
+        type: type?.trim() || null,
+        description: description?.trim() || null,
+        location: location?.trim() || null,
+        capacity: normalizedCapacity,
+        openingTime: openingTime?.trim() || null,
+        closingTime: closingTime?.trim() || null,
+        bookingRules: bookingRules?.trim() || null,
+        status: status || "AVAILABLE",
+      },
       include: {
         _count: {
           select: { bookings: true },

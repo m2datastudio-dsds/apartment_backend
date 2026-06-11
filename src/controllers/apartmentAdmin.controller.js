@@ -26,13 +26,24 @@ function normalizeResidentType(value) {
 }
 
 function defaultResidentPassword(mobileNumber) {
-  return String(mobileNumber || "").trim();
+  return "password123";
+}
+
+function normalizeAge(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 async function createOrLinkResidentAccount({
   name,
   mobileNumber,
   email,
+  age,
+  password,
   apartmentId,
   locationId,
   flatId,
@@ -58,11 +69,17 @@ async function createOrLinkResidentAccount({
   });
 
   if (existingUser) {
+    const passwordUpdate = password
+      ? { password: await bcrypt.hash(password, 10) }
+      : {};
+
     return prisma.user.update({
       where: { id: existingUser.id },
       data: {
         name: resolvedName,
         email: resolvedEmail || null,
+        age: normalizeAge(age),
+        ...passwordUpdate,
         apartmentId,
         locationId: locationId || null,
         flatId: flatId || null,
@@ -75,13 +92,14 @@ async function createOrLinkResidentAccount({
         name: true,
         mobileNumber: true,
         email: true,
+        age: true,
         residentType: true,
       },
     });
   }
 
   const [hashedPassword, userId, roleId] = await Promise.all([
-    bcrypt.hash(defaultResidentPassword(resolvedMobileNumber), 10),
+    bcrypt.hash(password || defaultResidentPassword(resolvedMobileNumber), 10),
     generateUserId(),
     getRoleId("RESIDENT"),
   ]);
@@ -92,6 +110,7 @@ async function createOrLinkResidentAccount({
       name: resolvedName,
       mobileNumber: resolvedMobileNumber,
       email: resolvedEmail || null,
+      age: normalizeAge(age),
       password: hashedPassword,
       roleId,
       locationId: locationId || null,
@@ -107,6 +126,7 @@ async function createOrLinkResidentAccount({
       name: true,
       mobileNumber: true,
       email: true,
+      age: true,
       residentType: true,
     },
   });
@@ -116,6 +136,7 @@ function normalizeFamilyMembers(value) {
   return Array.isArray(value)
     ? value
         .map((member) => ({
+          id: cleanText(member?.id),
           name: cleanText(member?.name),
           relationship: cleanText(member?.relationship),
           mobileNumber: cleanText(member?.mobileNumber),
@@ -150,6 +171,46 @@ async function createFamilyMembers({ apartmentId, flatId, residentId, familyMemb
         },
       })
     )
+  );
+}
+
+async function saveFamilyMembers({ apartmentId, flatId, residentId, familyMembers }) {
+  const normalizedMembers = normalizeFamilyMembers(familyMembers);
+
+  if (!flatId || !normalizedMembers.length) {
+    return [];
+  }
+
+  return Promise.all(
+    normalizedMembers.map(async (member) => {
+      const payload = {
+        apartmentId,
+        flatId,
+        residentId: residentId || null,
+        name: member.name,
+        relationship: member.relationship || null,
+        mobileNumber: member.mobileNumber || null,
+        email: member.email || null,
+        age: Number.isFinite(member.age) ? member.age : null,
+        notes: member.notes || null,
+      };
+
+      if (member.id) {
+        const existingMember = await prisma.residentFamilyMember.findFirst({
+          where: { id: member.id, apartmentId, residentId },
+          select: { id: true },
+        });
+
+        if (existingMember) {
+          return prisma.residentFamilyMember.update({
+            where: { id: existingMember.id },
+            data: payload,
+          });
+        }
+      }
+
+      return prisma.residentFamilyMember.create({ data: payload });
+    })
   );
 }
 
@@ -355,6 +416,7 @@ exports.createBlockOrFlat = async (req, res, next) => {
         name: occupantName,
         mobileNumber: occupantPhone,
         email: occupantEmail,
+        password: "password123",
         apartmentId,
         locationId: apartment.locationId,
         flatId: flat.id,
@@ -365,6 +427,7 @@ exports.createBlockOrFlat = async (req, res, next) => {
         name: tenantName,
         mobileNumber: tenantPhone,
         email: tenantEmail,
+        password: "password123",
         apartmentId,
         locationId: apartment.locationId,
         flatId: flat.id,
@@ -489,6 +552,7 @@ exports.getResidents = async (req, res, next) => {
         name: true,
         mobileNumber: true,
         email: true,
+        age: true,
         accountStatus: true,
         residentType: true,
         createdAt: true,
@@ -524,6 +588,70 @@ exports.getResidents = async (req, res, next) => {
   }
 };
 
+exports.getResidentById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { apartmentId } = req.query;
+
+    if (!id || !apartmentId) {
+      return res.status(400).json({ message: "id and apartmentId are required" });
+    }
+
+    const resident = await prisma.user.findFirst({
+      where: {
+        id,
+        apartmentId,
+        ...roleWhere("RESIDENT"),
+      },
+      select: {
+        id: true,
+        userId: true,
+        name: true,
+        mobileNumber: true,
+        email: true,
+        age: true,
+        accountStatus: true,
+        residentType: true,
+        flatId: true,
+        createdAt: true,
+        flat: {
+          select: {
+            id: true,
+            number: true,
+            block: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+        familyMembers: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            name: true,
+            relationship: true,
+            mobileNumber: true,
+            email: true,
+            age: true,
+            notes: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    if (!resident) {
+      return res.status(404).json({ message: "Resident was not found" });
+    }
+
+    res.json({ data: resident, message: "success" });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.createResident = async (req, res, next) => {
   try {
     const {
@@ -534,6 +662,7 @@ exports.createResident = async (req, res, next) => {
       mobileNumber,
       email,
       password,
+      age,
       residentType,
       familyMembers,
     } = req.body;
@@ -579,6 +708,7 @@ exports.createResident = async (req, res, next) => {
         name: cleanText(name),
         mobileNumber: cleanText(mobileNumber),
         email: cleanText(email) || null,
+        age: normalizeAge(age),
         password: hashedPassword,
         roleId,
         locationId: locationId || null,
@@ -594,6 +724,7 @@ exports.createResident = async (req, res, next) => {
         name: true,
         mobileNumber: true,
         email: true,
+        age: true,
         residentType: true,
         flatId: true,
       },
@@ -614,6 +745,114 @@ exports.createResident = async (req, res, next) => {
       message: savedFamilyMembers.length
         ? "resident and family members saved"
         : "resident saved",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.updateResident = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      apartmentId,
+      locationId,
+      flatId,
+      name,
+      mobileNumber,
+      email,
+      password,
+      age,
+      residentType,
+      familyMembers,
+    } = req.body;
+
+    if (!id || !apartmentId || !name || !mobileNumber) {
+      return res.status(400).json({ message: "id, apartmentId, name, and mobileNumber are required" });
+    }
+
+    const resident = await prisma.user.findFirst({
+      where: {
+        id,
+        apartmentId,
+        ...roleWhere("RESIDENT"),
+      },
+      select: { id: true },
+    });
+
+    if (!resident) {
+      return res.status(404).json({ message: "Resident was not found" });
+    }
+
+    if (flatId) {
+      const flat = await prisma.flat.findFirst({
+        where: { id: flatId, apartmentId },
+        select: { id: true },
+      });
+
+      if (!flat) {
+        return res.status(404).json({ message: "Selected flat was not found for this apartment" });
+      }
+    }
+
+    const cleanedMobileNumber = cleanText(mobileNumber);
+    const cleanedEmail = cleanText(email);
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        id: { not: id },
+        OR: [
+          { mobileNumber: cleanedMobileNumber },
+          ...(cleanedEmail ? [{ email: cleanedEmail }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({ message: "User with this mobile number or email already exists" });
+    }
+
+    const updatedResident = await prisma.user.update({
+      where: { id },
+      data: {
+        name: cleanText(name),
+        mobileNumber: cleanedMobileNumber,
+        email: cleanedEmail || null,
+        age: normalizeAge(age),
+        ...(password ? { password: await bcrypt.hash(password, 10) } : {}),
+        locationId: locationId || null,
+        apartmentId,
+        flatId: flatId || null,
+        residentType: normalizeResidentType(residentType),
+        accountStatus: "ACTIVE",
+      },
+      select: {
+        id: true,
+        userId: true,
+        name: true,
+        mobileNumber: true,
+        email: true,
+        age: true,
+        residentType: true,
+        flatId: true,
+      },
+    });
+
+    const savedFamilyMembers = await saveFamilyMembers({
+      apartmentId,
+      flatId: flatId || null,
+      residentId: updatedResident.id,
+      familyMembers,
+    });
+
+    res.json({
+      data: {
+        resident: updatedResident,
+        familyMembers: savedFamilyMembers,
+      },
+      message: savedFamilyMembers.length
+        ? "resident and family members updated"
+        : "resident updated",
     });
   } catch (error) {
     next(error);
@@ -689,6 +928,23 @@ exports.getComplaints = async (req, res, next) => {
         },
         assignedStaff: {
           select: {
+            id: true,
+            userId: true,
+            name: true,
+            mobileNumber: true,
+          },
+        },
+        assignedBy: {
+          select: {
+            id: true,
+            userId: true,
+            name: true,
+            mobileNumber: true,
+          },
+        },
+        closedBy: {
+          select: {
+            id: true,
             userId: true,
             name: true,
             mobileNumber: true,
@@ -837,6 +1093,7 @@ exports.createAssociationMember = async (req, res, next) => {
       apartmentId,
       flatId,
       residentId,
+      familyMemberId,
       memberName,
       committeeRole,
       mobileNumber,
@@ -846,8 +1103,8 @@ exports.createAssociationMember = async (req, res, next) => {
       status,
     } = req.body;
 
-    if (!apartmentId || !residentId) {
-      return res.status(400).json({ message: "apartmentId and residentId are required" });
+    if (!apartmentId || (!residentId && !familyMemberId)) {
+      return res.status(400).json({ message: "apartmentId and a resident or family member selection are required" });
     }
 
     const resolvedCommitteeRole = committeeRole || "Committee Member";
@@ -857,26 +1114,58 @@ exports.createAssociationMember = async (req, res, next) => {
       });
     }
 
-    const resident = await prisma.user.findFirst({
-      where: {
-        id: residentId,
-        apartmentId,
-        ...roleWhere("RESIDENT"),
-      },
-      select: {
-        id: true,
-        name: true,
-        mobileNumber: true,
-        email: true,
-        flatId: true,
-      },
-    });
+    const selectedPerson = familyMemberId
+      ? await prisma.residentFamilyMember.findFirst({
+          where: {
+            id: familyMemberId,
+            apartmentId,
+            age: {
+              gte: 18,
+            },
+          },
+          select: {
+            id: true,
+            residentId: true,
+            name: true,
+            mobileNumber: true,
+            email: true,
+            age: true,
+            flatId: true,
+          },
+        })
+      : await prisma.user.findFirst({
+          where: {
+            id: residentId,
+            apartmentId,
+            ...roleWhere("RESIDENT"),
+          },
+          select: {
+            id: true,
+            name: true,
+            mobileNumber: true,
+            email: true,
+            flatId: true,
+          },
+        });
 
-    if (!resident) {
-      return res.status(404).json({ message: "Selected resident was not found for this apartment" });
+    if (!selectedPerson) {
+      return res.status(404).json({
+        message: familyMemberId
+          ? "Selected family member was not found or is below 18."
+          : "Selected resident was not found for this apartment",
+      });
     }
 
-    const resolvedFlatId = flatId || resident.flatId;
+    const resolvedFlatId = flatId || selectedPerson.flatId;
+
+    const apartment = await prisma.apartment.findUnique({
+      where: { id: apartmentId },
+      select: { id: true, locationId: true },
+    });
+
+    if (!apartment) {
+      return res.status(404).json({ message: "Apartment was not found" });
+    }
 
     if (resolvedFlatId) {
       const flat = await prisma.flat.findFirst({
@@ -889,43 +1178,85 @@ exports.createAssociationMember = async (req, res, next) => {
       }
     }
 
-    const member = await prisma.associationMember.create({
-      data: {
+    const associationResident = familyMemberId
+      ? await createOrLinkResidentAccount({
+          name: selectedPerson.name,
+          mobileNumber: selectedPerson.mobileNumber,
+          email: selectedPerson.email,
+          age: selectedPerson.age,
+          password: "password123",
+          apartmentId,
+          locationId: apartment.locationId,
+          flatId: resolvedFlatId || null,
+          residentType: "FAMILY",
+          onboardingFlow: "ASSOCIATION_MEMBER_FROM_FAMILY",
+        })
+      : selectedPerson;
+
+    if (familyMemberId && !associationResident) {
+      return res.status(400).json({
+        message: "Family member name and mobile number are required to create login access.",
+      });
+    }
+
+    const existingMember = await prisma.associationMember.findFirst({
+      where: {
         apartmentId,
-        flatId: resolvedFlatId || null,
-        residentId: resident.id,
-        memberName: resident.name,
-        committeeRole: resolvedCommitteeRole,
-        mobileNumber: resident.mobileNumber || mobileNumber || null,
-        email: resident.email || email || null,
-        termStart: termStart ? new Date(termStart) : null,
-        termEnd: termEnd ? new Date(termEnd) : null,
-        status: status || "ACTIVE",
+        residentId: associationResident.id,
       },
-      include: {
-        resident: {
-          select: {
-            id: true,
-            userId: true,
-            name: true,
-            mobileNumber: true,
-            email: true,
-          },
+      select: { id: true },
+    });
+
+    const memberPayload = {
+      apartmentId,
+      flatId: resolvedFlatId || null,
+      residentId: associationResident.id,
+      memberName: selectedPerson.name || memberName,
+      committeeRole: resolvedCommitteeRole,
+      mobileNumber: selectedPerson.mobileNumber || mobileNumber || null,
+      email: selectedPerson.email || email || null,
+      termStart: termStart ? new Date(termStart) : null,
+      termEnd: termEnd ? new Date(termEnd) : null,
+      status: status || "ACTIVE",
+    };
+
+    const include = {
+      resident: {
+        select: {
+          id: true,
+          userId: true,
+          name: true,
+          mobileNumber: true,
+          email: true,
         },
-        flat: {
-          select: {
-            number: true,
-            block: {
-              select: {
-                name: true,
-              },
+      },
+      flat: {
+        select: {
+          number: true,
+          block: {
+            select: {
+              name: true,
             },
           },
         },
       },
-    });
+    };
 
-    res.status(201).json({ data: member, message: "association member created" });
+    const member = existingMember
+      ? await prisma.associationMember.update({
+          where: { id: existingMember.id },
+          data: memberPayload,
+          include,
+        })
+      : await prisma.associationMember.create({
+          data: memberPayload,
+          include,
+        });
+
+    res.status(existingMember ? 200 : 201).json({
+      data: member,
+      message: existingMember ? "association member updated" : "association member created",
+    });
   } catch (error) {
     next(error);
   }
@@ -942,6 +1273,25 @@ exports.getDocuments = async (req, res, next) => {
     const documents = await prisma.apartmentDocument.findMany({
       where: { apartmentId },
       orderBy: { uploadedAt: "desc" },
+      include: {
+        resident: {
+          select: {
+            id: true,
+            userId: true,
+            name: true,
+            mobileNumber: true,
+          },
+        },
+        flat: {
+          select: {
+            id: true,
+            number: true,
+            block: {
+              select: { name: true },
+            },
+          },
+        },
+      },
     });
 
     res.json({ data: documents, message: "success" });
@@ -952,15 +1302,54 @@ exports.getDocuments = async (req, res, next) => {
 
 exports.createDocument = async (req, res, next) => {
   try {
-    const { apartmentId, title, category, description, fileType, fileName, fileData, status } = req.body;
+    const {
+      apartmentId,
+      flatId,
+      residentId,
+      title,
+      category,
+      description,
+      fileType,
+      fileName,
+      fileData,
+      status,
+    } = req.body;
 
     if (!apartmentId || !title) {
       return res.status(400).json({ message: "apartmentId and title are required" });
     }
 
+    if (flatId) {
+      const flat = await prisma.flat.findFirst({
+        where: { id: flatId, apartmentId },
+        select: { id: true },
+      });
+
+      if (!flat) {
+        return res.status(404).json({ message: "Selected flat was not found for this apartment" });
+      }
+    }
+
+    if (residentId) {
+      const resident = await prisma.user.findFirst({
+        where: { id: residentId, apartmentId },
+        select: { id: true, flatId: true },
+      });
+
+      if (!resident) {
+        return res.status(404).json({ message: "Selected resident was not found for this apartment" });
+      }
+
+      if (flatId && resident.flatId && resident.flatId !== flatId) {
+        return res.status(400).json({ message: "Selected resident does not belong to the selected flat" });
+      }
+    }
+
     const document = await prisma.apartmentDocument.create({
       data: {
         apartmentId,
+        flatId: flatId || null,
+        residentId: residentId || null,
         title,
         category: category || null,
         description: description || null,
@@ -968,6 +1357,25 @@ exports.createDocument = async (req, res, next) => {
         fileName: fileName || null,
         fileData: fileData || null,
         status: status || "ACTIVE",
+      },
+      include: {
+        resident: {
+          select: {
+            id: true,
+            userId: true,
+            name: true,
+            mobileNumber: true,
+          },
+        },
+        flat: {
+          select: {
+            id: true,
+            number: true,
+            block: {
+              select: { name: true },
+            },
+          },
+        },
       },
     });
 

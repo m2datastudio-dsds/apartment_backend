@@ -36,6 +36,7 @@ model User {
   accountStatus String?
   onboardingFlow String?
   residentType String?
+  age          Int?
   proofDocumentType String?
   proofDocumentName String?
   proofDocumentData String? @db.Text
@@ -58,6 +59,8 @@ model User {
 
   raisedComplaints   Complaint[] @relation("ResidentComplaints")
   assignedComplaints Complaint[] @relation("StaffComplaints")
+  complaintsAssignedBy Complaint[] @relation("ComplaintAssignedBy")
+  complaintsClosedBy   Complaint[] @relation("ComplaintClosedBy")
   amenityBookings    AmenityBooking[]
   surveyResponses    SurveyResponse[]
   helpdeskTickets    HelpdeskTicket[]
@@ -66,6 +69,9 @@ model User {
   communityTalentProfiles CommunityTalentProfile[]
   associationMemberships AssociationMember[]
   familyMembers ResidentFamilyMember[]
+  documents ApartmentDocument[]
+  residentVisitorRecords VisitorRecord[] @relation("ResidentVisitorRecords")
+  staffVisitorRecords VisitorRecord[] @relation("StaffVisitorRecords")
 }
 
 model Location {
@@ -135,6 +141,8 @@ model Apartment {
   parkingSlots ParkingSlot[]
   communityTalentProfiles CommunityTalentProfile[]
   familyMembers ResidentFamilyMember[]
+  visitorRecords VisitorRecord[]
+  emergencyEvents EmergencyEvent[]
 }
 
 model Block {
@@ -179,6 +187,83 @@ model Flat {
   parkingSlots ParkingSlot[]
   communityTalentProfiles CommunityTalentProfile[]
   familyMembers ResidentFamilyMember[]
+  documents ApartmentDocument[]
+  visitorRecords VisitorRecord[]
+}
+
+model VisitorRecord {
+  id              String    @id @default(uuid())
+  apartmentId     String
+  residentId      String?
+  flatId          String?
+  staffId         String?
+  staffName       String?
+  visitorType     String    @default("VISITOR")
+  visitorName     String
+  mobileNumber    String?
+  purpose         String?
+  vehicleNumber   String?
+  visitDate       DateTime?
+  passCode        String?   @unique
+  status          String    @default("PENDING")
+  approved        Boolean   @default(false)
+  blocked         Boolean   @default(false)
+  residentName    String?
+  residentMobile  String?
+  flatNumber      String?
+  blockName       String?
+  proofType       String?
+  proofName       String?
+  proofData       String?   @db.Text
+  documentType    String?
+  documentNumber  String?
+  notes           String?   @db.Text
+  decisionAt      DateTime?
+  decisionNotes   String?   @db.Text
+  entryAcceptedAt DateTime?
+  exitAcceptedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  apartment       Apartment @relation(fields: [apartmentId], references: [id])
+  resident        User?     @relation("ResidentVisitorRecords", fields: [residentId], references: [id])
+  flat            Flat?     @relation(fields: [flatId], references: [id])
+  staff           User?     @relation("StaffVisitorRecords", fields: [staffId], references: [id])
+
+  @@index([apartmentId])
+  @@index([residentId])
+  @@index([flatId])
+  @@index([staffId])
+  @@index([status])
+  @@index([visitDate])
+}
+
+model EmergencyEvent {
+  id              String   @id @default(uuid())
+  apartmentId     String
+  flatId          String?
+  residentId      String?
+  residentName    String?
+  flatLabel       String?
+  mobileNumber    String?
+  type            String   @default("PANIC_ALERT")
+  status          String   @default("OPEN")
+  message         String   @db.Text
+  responseMessage String?  @db.Text
+  respondedById   String?
+  respondedByName String?
+  respondedByRole String?
+  respondedAt     DateTime?
+  triggeredAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  apartment       Apartment @relation(fields: [apartmentId], references: [id])
+
+  @@index([apartmentId])
+  @@index([residentId])
+  @@index([status])
+  @@index([triggeredAt])
 }
 
 model ResidentFamilyMember {
@@ -300,6 +385,13 @@ model DeliveryRecord {
   expectedTime String?
   requestedOn  DateTime @default(now())
   note         String?  @db.Text
+  pickupStaffId String?
+  pickupStaffName String?
+  pickupStaffUserId String?
+  pickupStaffPhone String?
+  pickedUpAt   DateTime?
+  residentReceivedName String?
+  residentReceivedAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -314,6 +406,8 @@ model Pet {
   status        String   @default("Pending")
   vaccineStatus String   @default("Due")
   documentName  String?
+  documentType  String?
+  documentData  String?  @db.Text
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -424,6 +518,8 @@ model Announcement {
 model ApartmentDocument {
   id          String   @id @default(uuid())
   apartmentId String
+  flatId      String?
+  residentId  String?
   title       String
   category    String?
   description String?
@@ -436,6 +532,12 @@ model ApartmentDocument {
   updatedAt   DateTime @updatedAt
 
   apartment   Apartment @relation(fields: [apartmentId], references: [id])
+  flat        Flat?     @relation(fields: [flatId], references: [id])
+  resident    User?     @relation(fields: [residentId], references: [id])
+
+  @@index([apartmentId])
+  @@index([flatId])
+  @@index([residentId])
 }
 
 model ParkingSlot {
@@ -468,6 +570,8 @@ model Complaint {
   flatId          String?
   residentId      String
   assignedStaffId String?
+  assignedById    String?
+  closedById      String?
   residentProofType String?
   residentProofName String?
   residentProofData String? @db.Text
@@ -482,12 +586,21 @@ model Complaint {
   flat            Flat?     @relation(fields: [flatId], references: [id])
   resident        User      @relation("ResidentComplaints", fields: [residentId], references: [id])
   assignedStaff   User?     @relation("StaffComplaints", fields: [assignedStaffId], references: [id])
+  assignedBy      User?     @relation("ComplaintAssignedBy", fields: [assignedById], references: [id])
+  closedBy        User?     @relation("ComplaintClosedBy", fields: [closedById], references: [id])
 }
 
 model Amenity {
   id          String   @id @default(uuid())
   apartmentId String
   name        String
+  type        String?
+  description String?  @db.Text
+  location    String?
+  capacity    Int?
+  openingTime String?
+  closingTime String?
+  bookingRules String? @db.Text
   status      String   @default("AVAILABLE")
   createdAt   DateTime @default(now())
   apartment   Apartment @relation(fields: [apartmentId], references: [id])
@@ -539,6 +652,9 @@ model HelpdeskTicket {
   residentId  String
   subject     String
   description String
+  answer      String?  @db.Text
+  answeredAt  DateTime?
+  answerFaqId String?
   status      String   @default("OPEN")
   createdAt   DateTime @default(now())
   apartment   Apartment @relation(fields: [apartmentId], references: [id])
